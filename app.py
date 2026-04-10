@@ -1,6 +1,7 @@
 import streamlit as st
 import time
 import random
+import pandas as pd
 from datetime import datetime
 try:
     import cv2
@@ -10,6 +11,8 @@ except ImportError:
 # ==========================================
 # INITIALISATION DE L'ÉTAT (SESSION STATE)
 # ==========================================
+if 'auth_status' not in st.session_state:
+    st.session_state.auth_status = False
 if 'vitesse' not in st.session_state:
     st.session_state.vitesse = 10
 if 'distance' not in st.session_state:
@@ -22,12 +25,41 @@ if 'journal' not in st.session_state:
     ]
 if 'alertes' not in st.session_state:
     st.session_state.alertes = []
+if 'telemetry' not in st.session_state:
+    st.session_state.telemetry = pd.DataFrame(columns=["Temps", "Vitesse_Reelle", "Distance_Reelle"])
+if 'gps_data' not in st.session_state:
+    st.session_state.gps_data = pd.DataFrame({"lat": [48.8566], "lon": [2.3522]})
+if 'current_speed' not in st.session_state:
+    st.session_state.current_speed = 0.0
+if 'current_dist' not in st.session_state:
+    st.session_state.current_dist = 3.0
 
 def log_event(message):
     timestamp = datetime.now().strftime('%H:%M:%S')
     st.session_state.journal.insert(0, f"{timestamp} - {message}")
     if len(st.session_state.journal) > 15:
         st.session_state.journal.pop()
+
+def simulate_step():
+    # Simulate perfect real-time tracking
+    if st.session_state.convoi_status == 'RUNNING':
+        st.session_state.current_speed = st.session_state.vitesse
+        st.session_state.current_dist = st.session_state.distance
+        st.session_state.gps_data.loc[0, 'lat'] += random.uniform(-0.00005, 0.00005)
+        st.session_state.gps_data.loc[0, 'lon'] += random.uniform(-0.00005, 0.00005)
+    else:
+        # Gradually decelerate or return to target if stopped
+        st.session_state.current_speed = 0.0
+        st.session_state.current_dist = st.session_state.distance
+        
+    new_data = pd.DataFrame({
+        "Temps": [datetime.now().strftime('%H:%M:%S')],
+        "Vitesse_Reelle": [st.session_state.current_speed],
+        "Distance_Reelle": [st.session_state.current_dist]
+    })
+    st.session_state.telemetry = pd.concat([st.session_state.telemetry, new_data], ignore_index=True)
+    if len(st.session_state.telemetry) > 50:
+        st.session_state.telemetry = st.session_state.telemetry.tail(50)
 
 # ==========================================
 # DESIGN THEME TACTIQUE / MILITAIRE (CSS)
@@ -124,15 +156,15 @@ def draw_convoy_diagram():
     html = f"""
     <div style='background: #10140e; padding: 25px; border-radius: 10px; border: 2px solid #2e3a24; text-align: center; box-shadow: inset 0 0 15px rgba(0,0,0,0.8); white-space: nowrap; overflow-x: auto;'>
         <div style='display: inline-block; padding: 25px 10px; background: #1c4516; border: 3px solid #6b9e4a; border-radius: 12px; color: white; font-weight: bold; font-size: 1.4em; width: 170px; box-shadow: 0 0 15px rgba(76, 175, 80, 0.4); margin: 0 5px; vertical-align: middle;'>
-            🚐 LEADER
+            🚛 LEADER
         </div>
         <span style='color: #8da675; font-weight: bold; font-size: 1.1em; margin: 0 5px; vertical-align: middle;'>--- {st.session_state.distance} m ---▶</span>
         <div style='display: inline-block; padding: 12px; background: #3d4a34; border: 2px solid #5a7547; border-radius: 8px; color: lightgray; width: 120px; font-size: 0.9em; margin: 0 5px; vertical-align: middle;'>
-            🚙 SUIVEUR 1
+            🛻 SUIVEUR 1
         </div>
         <span style='color: #8da675; font-weight: bold; font-size: 1.1em; margin: 0 5px; vertical-align: middle;'>--- {st.session_state.distance} m ---▶</span>
         <div style='display: inline-block; padding: 12px; background: #3d4a34; border: 2px solid #5a7547; border-radius: 8px; color: lightgray; width: 120px; font-size: 0.9em; margin: 0 5px; vertical-align: middle;'>
-            🚙 SUIVEUR 2
+            🛻 SUIVEUR 2
         </div>
     </div>
     """
@@ -151,27 +183,36 @@ def interface_supervision():
         
         st.markdown("<br>", unsafe_allow_html=True)
         cA, cB, cC = st.columns(3)
-        cA.metric("Vitesse Actuelle", f"{st.session_state.vitesse} km/h")
-        cB.metric("Distance Objectif", f"{st.session_state.distance} m")
-        cC.metric("État Communication", "OK", delta="Stable", delta_color="normal")
+        
+        cA.metric("Vitesse Actuelle", f"{st.session_state.current_speed:.1f} km/h")
+        cB.metric("Distance Actuelle", f"{st.session_state.current_dist:.1f} m")
+        cC.metric("État Communication", "OK", delta="Stable 12ms", delta_color="normal")
         
         status_msg = "🟢 EN MOUVEMENT" if st.session_state.convoi_status == "RUNNING" else "🔴 À L'ARRÊT"
+        if st.session_state.convoi_status == 'EMERGENCY':
+            status_msg = "🚨 ARRÊT D'URGENCE"
         st.markdown(f"**État du Convoi:** {status_msg}")
         
     with col2:
-        st.subheader("Statut & Alertes Rapides")
-        st.markdown("🔋 **Batterie Globale:** 85%")
-        st.markdown("📡 **Réseau Master:** Connecté")
-        st.markdown("---")
+        st.subheader("Localisation GPS Leader")
+        st.map(st.session_state.gps_data, zoom=16, height=220)
         
-        # Simulated states of vehicles
-        st.markdown("☑️ Leader: <span style='color:#00C851'>Normal</span>", unsafe_allow_html=True)
-        st.markdown("☑️ Suiveur 1: <span style='color:#00C851'>Normal</span>", unsafe_allow_html=True)
-        st.markdown("☑️ Suiveur 2: <span style='color:#ffbb33'>Latence Moteur</span>", unsafe_allow_html=True)
-        
-        st.markdown("---")
-        st.caption("Dernier événement:")
-        st.code(st.session_state.journal[0] if st.session_state.journal else "Aucun")
+    st.markdown("---")
+    st.subheader("📈 Télémétrie en Temps Réel")
+    tcol1, tcol2 = st.columns(2)
+    with tcol1:
+        st.caption("Vitesse du Leader (km/h)")
+        if not st.session_state.telemetry.empty:
+            st.area_chart(st.session_state.telemetry.set_index('Temps')['Vitesse_Reelle'], color="#ffaa00", height=200)
+        else:
+            st.info("En attente de données...")
+            
+    with tcol2:
+        st.caption("Distance de Suivi (m)")
+        if not st.session_state.telemetry.empty:
+            st.line_chart(st.session_state.telemetry.set_index('Temps')['Distance_Reelle'], color="#00ffaa", height=200)
+        else:
+            st.info("En attente de données...")
 
 
 def interface_commande():
@@ -301,9 +342,32 @@ def interface_vision():
 # ==========================================
 # APPLICATION PRINCIPALE
 # ==========================================
+def authenticate():
+    st.markdown("<br><br><h2 style='text-align:center;'>🔒 ACCÈS MILITAIRE SÉCURISÉ REQUIS</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align:center; color:#8da675;'>Veuillez entrer vos identifiants d'opérateur pour contrôler le convoi.</p>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col2:
+        st.markdown("<div style='background-color: #2b3626; padding: 20px; border-radius: 10px; border: 2px solid #4a5c40;'>", unsafe_allow_html=True)
+        with st.form("login_form"):
+            pwd = st.text_input("Code d'Accès Tactique", type="password", placeholder="Entrez le code...")
+            submitted = st.form_submit_button("DÉVERROUILLER 🔓", use_container_width=True)
+            if submitted:
+                if pwd == "arm2026":
+                    st.session_state.auth_status = True
+                    st.rerun()
+                else:
+                    st.error("❌ Code invalide. Accès refusé.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
 def main():
     st.set_page_config(page_title="Système de Convoi Intelligent", layout="wide", page_icon="🛡️")
     apply_css()
+    
+    if not st.session_state.auth_status:
+        authenticate()
+        return
+        
+    simulate_step()  # Advance simulation state on each UI interaction
     
     # Top Bar Header like a tactical interface
     c_img, c_title, c_stats = st.columns([1, 6, 2])
